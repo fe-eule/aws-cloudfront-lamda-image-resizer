@@ -49,10 +49,15 @@ Write code (See this repository source code)
 
 <img width="870" alt="image" src="https://github.com/user-attachments/assets/6c21d91c-7cde-44a6-80d0-15e907d89694">
 
+> Upload Lamda
+
+<img width="450" alt="image" src="https://github.com/user-attachments/assets/31fcf3e0-cda4-4e08-8bd1-fa62ad8f1095">
+
+Select "Directory" -> "No" -> Select proejct folder -> Open (just few minutes left, it will show complete message toast)
+
 > Add Trigger
 
 <img width="870" alt="iShot_2024-07-16_09 14 17" src="https://github.com/user-attachments/assets/d2396240-8b91-44e9-8b0d-d0d8e5e3b115">
-
 
 > Deploy
 
