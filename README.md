@@ -16,6 +16,8 @@ Add query parameters. that's it.
 - format ('auto' option check accept request header)
 - quality (0~100, default: 100)
 
+### Request image example
+
 - https://your-domain/images/hangang-river.jpeg?width=1100 (940KB)
 - https://your-domain/images/hangang-river.jpeg?width=1100&format=webp (658KB)
 
