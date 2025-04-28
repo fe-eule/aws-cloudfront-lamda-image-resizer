@@ -1,4 +1,4 @@
-# aws-cloundfront-lamda-image-resizer
+# aws-cloudfront-lambda-image-resizer
 
 This is a simple example of how to use AWS Lambda to resize images on the fly using Amazon CloudFront.
 
@@ -9,11 +9,11 @@ This is a simple example of how to use AWS Lambda to resize images on the fly us
 
 ## How to use
 
-Add query parameters. that's it.
+Add query parameters. That's it.
 
 - width
 - height
-- format ('auto' option check accept request header)
+- format ('auto' option checks the Accept request header)
 - quality (0~100, default: 100)
 
 ### Request image example
@@ -33,29 +33,60 @@ Add query parameters. that's it.
 6. If the image is updated, the cache is invalidated and the process starts over.
 7. The Lambda function is only invoked when the image is requested for the first time or when the cache is invalidated.
 
+## How to test
+
+1. Build the Docker image:
+
+```bash
+docker build -t lambda-image-resizer .
+```
+
+2. Create a directory to store test images and run the Docker container:
+
+```bash
+mkdir -p test-images
+docker run -it -v $(pwd)/test-images:/app/test-images lambda-image-resizer /bin/sh
+```
+
+3. After accessing the container, you can run the test as follows:
+
+```bash
+aws-lambda-local -l index.mjs -h handler -e test-event.json
+```
+
+### Configuration
+
+- Modify the following environment variables in the Dockerfile if needed:
+  - AWS_REGION: AWS region
+  - S3_BUCKET: S3 bucket name
+  - If AWS credentials are required, uncomment the relevant section and provide the values.
+- To test with actual images, place test image files in the `test-images` directory and update the URI path in `test-event.json` to match the image file path.
+
+This test environment allows you to test the Lambda function's image processing logic locally without connecting to actual AWS resources. To connect to a real S3 bucket, set up appropriate AWS credentials.
+
 ## AWS setup
 
-> Create lamda function (choose us-east-1 for using cloudfront response trigger)
+> Create a Lambda function (choose us-east-1 to use the CloudFront response trigger)
 
 <img width="870" alt="iShot_2024-07-16_09 13 55" src="https://github.com/user-attachments/assets/0d9fbb2f-8e80-4367-98d9-728bc847efc7">
 
-> Create clound9 for writing lamda function source code
+> Create a Cloud9 environment for writing the Lambda function source code
 
 <img width="870" alt="image" src="https://github.com/user-attachments/assets/dafcc477-d42d-4217-a64b-fd819885ba66">
 
-> Write lamda function 
+> Write the Lambda function
 
-Write code (See this repository source code)
+Write the code (See this repository's source code)
 
 <img width="870" alt="image" src="https://github.com/user-attachments/assets/6c21d91c-7cde-44a6-80d0-15e907d89694">
 
-> Upload Lamda
+> Upload the Lambda function
 
 <img width="450" alt="image" src="https://github.com/user-attachments/assets/31fcf3e0-cda4-4e08-8bd1-fa62ad8f1095">
 
-Select "Directory" -> "No" -> Select proejct folder -> Open (just few minutes left, it will show complete message toast)
+Select "Directory" -> "No" -> Select the project folder -> Open (after a few minutes, a completion message will appear)
 
-> Add Trigger
+> Add a Trigger
 
 <img width="870" alt="iShot_2024-07-16_09 14 17" src="https://github.com/user-attachments/assets/d2396240-8b91-44e9-8b0d-d0d8e5e3b115">
 

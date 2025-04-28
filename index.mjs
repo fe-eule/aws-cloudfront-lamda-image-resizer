@@ -1,153 +1,230 @@
-import querystring from "querystring"; // Don't install.
 import AWS from "aws-sdk";
-
 import Sharp from "sharp";
 
-const S3 = new AWS.S3({
-  region: "ap-northeast-2",
-});
+const S3 = new AWS.S3({ region: "ap-northeast-2" });
+const BUCKET = "your-bucket-name"; // Enter your bucket name here
 
-const BUCKET = "your-bucket-name"; // Input your bucket
+const supportImageTypes = new Set([
+  "auto",
+  "jpg",
+  "jpeg",
+  "webp",
+  "avif",
+  "png",
+]);
 
-// Image types that can be handled by Sharp
-const supportImageTypes = ["auto", "jpg", "jpeg", "webp", "avif", "png"];
-
+// Format initialization function
 function initFormat(draftFormat, acceptHeader) {
-  switch (draftFormat) {
-    case "auto":
-      if (acceptHeader) {
-        if (acceptHeader.value.includes("avif")) {
-          return "avif";
-        } else if (acceptHeader.value.includes("webp")) {
-          return "webp";
-        }
-      } else {
-        return "jpeg";
-      }
-
-      break;
-
-    case "jpg":
-      return "jpeg";
-
-    default:
-      return draftFormat;
+  if (draftFormat === "auto") {
+    if (acceptHeader.value.includes("avif")) return "avif";
+    if (acceptHeader.value.includes("webp")) return "webp";
+    return "jpeg";
   }
+  return draftFormat === "jpg" ? "jpeg" : draftFormat;
 }
 
-export const handler = async (event, context, callback) => {
-  let s3Object;
-  let resizedImage;
+// Common response handler
+function responseHandler(
+  response,
+  { status, statusDescription, body, contentType, bodyEncoding }
+) {
+  response.status = status;
+  response.statusDescription = statusDescription;
+  response.body = body;
+  if (contentType)
+    response.headers["content-type"] = [
+      { key: "Content-Type", value: contentType },
+    ];
+  if (bodyEncoding) response.bodyEncoding = bodyEncoding;
+}
 
-  const { request, response } = event.Records[0].cf;
-  const { uri } = request;
-  const params = querystring.parse(request.querystring);
-  const ObjectKey = decodeURIComponent(uri).substring(1);
+// Parse and validate request parameters
+function parseRequestParams(request) {
+  const { uri, querystring } = request;
+  const params = querystring ? querystring.parse(querystring) : {};
+  const objectKey = decodeURIComponent(uri).slice(1);
 
-  // If there is no width or height, return the original image.
-  if (!(params.width || params.height)) {
-    return callback(null, response);
+  // Parse params
+  const width = params.width ? parseInt(params.width, 10) : null;
+  const height = params.height ? parseInt(params.height, 10) : null;
+  const quality = params.quality ? parseInt(params.quality, 10) : 100;
+  const extension = uri.split(".").pop().toLowerCase();
+  const lowerFormat = (params.format || extension).toLowerCase();
+
+  return {
+    objectKey,
+    width,
+    height,
+    quality,
+    extension,
+    lowerFormat,
+    hasResizingParams: !!(params.width || params.height),
+    hasFormatParam: !!params.f,
+  };
+}
+
+// Calculate dimensions for resizing
+async function calculateResizeDimensions(
+  sharpInstance,
+  requestedWidth,
+  requestedHeight
+) {
+  const metadata = await sharpInstance.metadata();
+  let shouldResize = false;
+  let finalWidth = requestedWidth;
+  let finalHeight = requestedHeight;
+
+  if (requestedWidth && requestedWidth > metadata.width) {
+    finalWidth = metadata.width;
+    console.log(
+      `Requested width (${requestedWidth}) is larger than original (${metadata.width}). Using original width.`
+    );
+  } else if (requestedWidth) {
+    shouldResize = true;
   }
 
-  const width = parseInt(params.width, 10) || null;
-  const height = parseInt(params.height, 10) || null;
-  // Sharp has different default values for quality depending on the image format.
-  // https://sharp.pixelplumbing.com/api-output#toformat
-  const quality = parseInt(params.quality, 10) || 100;
-  const extension = uri.match(/\/?(.*)\.(.*)/)[2].toLowerCase();
-  console.log("extension : ", extension);
-
-  // Return the original if there is no format conversion for GIF format requests.
-  if (extension === "gif" && !params.f) {
-    return callback(null, response);
+  if (requestedHeight && requestedHeight > metadata.height) {
+    finalHeight = metadata.height;
+    console.log(
+      `Requested height (${requestedHeight}) is larger than original (${metadata.height}). Using original height.`
+    );
+  } else if (requestedHeight) {
+    shouldResize = true;
   }
 
-  const lowerCaseFormat = (params.format || extension).toLowerCase();
-  const acceptHeader = request.headers["accept"];
-  const finalFormat = initFormat(lowerCaseFormat, acceptHeader);
+  return {
+    shouldResize,
+    finalWidth,
+    finalHeight,
+    metadata,
+  };
+}
 
-  if (!supportImageTypes.some((type) => type === extension)) {
-    responseHandler(403, "Forbidden", "Unsupported image type", [
-      {
-        key: "Content-Type",
-        value: "text/plain",
-      },
-    ]);
-    return callback(null, response);
-  }
+// Process image based on parameters
+async function processImage(imageBody, params) {
+  const { finalWidth, finalHeight, shouldResize, metadata } = params;
+  const { quality, finalFormat } = params;
 
-  // Verify For AWS CloudWatch.
-  console.log(`params: ${JSON.stringify(params)}`); // Cannot convert object to primitive value.\
-  console.log("S3 Object key:", ObjectKey);
-  console.log("Bucket name : ", BUCKET);
+  const sharpInstance = Sharp(imageBody);
 
-  try {
-    s3Object = await S3.getObject({
-      Bucket: BUCKET,
-      Key: ObjectKey,
-    }).promise();
-
-    console.log("S3 Object:", s3Object);
-  } catch (error) {
-    console.log("S3.getObject error : ", error);
-    responseHandler(404, "Not Found", "OMG... The image does not exist.", [
-      { key: "Content-Type", value: "text/plain" },
-    ]);
-    return callback(null, response);
-  }
-
-  try {
-    /**
-     * @reference http://sharp.pixelplumbing.com/en/stable/api-resize/
-     */
-    resizedImage = await Sharp(s3Object.Body)
+  let processedImage;
+  if (shouldResize) {
+    processedImage = await sharpInstance
       .rotate()
-      .resize(width, height, { fit: "contain" })
-      .toFormat(finalFormat, {
-        quality,
-      })
+      .resize(finalWidth, finalHeight, { fit: "contain" })
+      .toFormat(finalFormat, { quality })
       .toBuffer();
-  } catch (error) {
-    console.log("Sharp error : ", error);
-    responseHandler(500, "Internal Server Error", "Fail to resize image.", [
-      {
-        key: "Content-Type",
-        value: "text/plain",
-      },
-    ]);
-    return callback(null, response);
-  }
-
-  responseHandler(
-    200,
-    "OK",
-    resizedImage.toString("base64"),
-    [
-      {
-        key: "Content-Type",
-        value: `image/${finalFormat}`,
-      },
-    ],
-    "base64"
-  );
-
-  function responseHandler(
-    status,
-    statusDescription,
-    body,
-    contentHeader,
-    bodyEncoding
-  ) {
-    response.status = status;
-    response.statusDescription = statusDescription;
-    response.body = body;
-    response.headers["content-type"] = contentHeader;
-    if (bodyEncoding) {
-      response.bodyEncoding = bodyEncoding;
+    console.log(`Image resized to ${finalWidth}x${finalHeight}`);
+  } else {
+    // If no resizing needed, just convert format if necessary
+    if (finalFormat !== metadata.format) {
+      processedImage = await sharpInstance
+        .rotate()
+        .toFormat(finalFormat, { quality })
+        .toBuffer();
+      console.log(`Image format converted to ${finalFormat} without resizing`);
+    } else {
+      // Use original image if no resizing or format conversion needed
+      processedImage = imageBody;
+      console.log("Using original image (no resizing needed)");
     }
   }
 
-  console.log("Success resizing image");
+  return processedImage;
+}
+
+// Handle errors in image processing
+function handleError(error, response) {
+  console.error("Error occurred:", error);
+  const status = error.code === "NoSuchKey" ? 404 : 500;
+  const message =
+    status === 404 ? "Image not found." : "Image processing failed.";
+
+  responseHandler(response, {
+    status,
+    statusDescription: status === 404 ? "Not Found" : "Internal Server Error",
+    body: message,
+    contentType: "text/plain",
+  });
+
+  return response;
+}
+
+// Fetch image from S3
+async function fetchImageFromS3(objectKey) {
+  return await S3.getObject({
+    Bucket: BUCKET,
+    Key: objectKey,
+  }).promise();
+}
+
+export const handler = async (event, context, callback) => {
+  const { request, response } = event.Records[0].cf;
+
+  // Parse request parameters
+  const {
+    objectKey,
+    width,
+    height,
+    quality,
+    extension,
+    lowerFormat,
+    hasResizingParams,
+    hasFormatParam,
+  } = parseRequestParams(request);
+
+  // Return the original image if neither width nor height is provided
+  if (!hasResizingParams) return callback(null, response);
+
+  // Return the original image if it's a GIF and no format conversion is requested
+  if (extension === "gif" && !hasFormatParam) return callback(null, response);
+
+  const acceptHeader = request.headers?.accept;
+  const finalFormat = initFormat(lowerFormat, acceptHeader);
+
+  // Block unsupported formats
+  if (!supportImageTypes.has(lowerFormat)) {
+    responseHandler(response, {
+      status: 403,
+      statusDescription: "Forbidden",
+      body: "Unsupported image type",
+      contentType: "text/plain",
+    });
+    return callback(null, response);
+  }
+
+  try {
+    // Fetch the object from S3
+    const { Body } = await fetchImageFromS3(objectKey);
+
+    // Create Sharp instance and get dimensions
+    const sharpInstance = Sharp(Body);
+    const { shouldResize, finalWidth, finalHeight, metadata } =
+      await calculateResizeDimensions(sharpInstance, width, height);
+
+    // Process the image
+    const processedImage = await processImage(Body, {
+      finalWidth,
+      finalHeight,
+      shouldResize,
+      metadata,
+      quality,
+      finalFormat,
+    });
+
+    // Successful response
+    responseHandler(response, {
+      status: 200,
+      statusDescription: "OK",
+      body: processedImage.toString("base64"),
+      contentType: `image/${finalFormat}`,
+      bodyEncoding: "base64",
+    });
+
+    console.log("Image processing successful");
+  } catch (error) {
+    handleError(error, response);
+  }
 
   return callback(null, response);
 };
